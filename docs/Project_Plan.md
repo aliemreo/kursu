@@ -60,7 +60,7 @@ A four-person student team develops this project during the fall 2026 course, al
 | D-04 | Opponent AI Integration | LLM adapter, deterministic mock for development, and an opponent model; retrieval grounding in ParlaMint-TR speeches is optional. | In the acceptance configuration, a real model returns a valid opponent turn; when retrieval grounding is enabled, its citations are traceable to dataset speeches; mock-only behavior is used for development/test, not as proof of AI integration. |
 | D-05 | Judge and Evaluation Engine | Qualitative transcript evaluation, structured outcome categories, bounded quantitative metric-change proposals, schema checks and evaluation cases. | A real judge produces valid winner/outcome and metric-delta reports; out-of-range or unsupported outputs are rejected or handled safely; repeat and side-swap tests are reported against team-defined thresholds. |
 | D-06 | Testing, Deployment and Documentation | CI checks, integration tests, staging deployment, API/design documentation and runbook. | CI passes; staging runs; setup, test evidence, AI-assistance records and key design decisions are documented. |
-| D-07 | Parliamentary Data and Topic Content | Establish a topic pool by collecting and categorizing parliamentary data, with documented topic categories, relevant speeches, and outcome configurations. | Depending on game length multiple game topics will be playaed end to end.|
+| D-07 | Parliamentary Data and Topic Content | Establish a topic pool by collecting and categorizing parliamentary data, with documented topic categories, relevant speeches, and outcome configurations. | Depending on game length multiple game topics will be played end to end.|
 
 ### 1.3 Major Functional Capabilities and Project Tasks
 
