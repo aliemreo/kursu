@@ -1,0 +1,33 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Node
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Data and models (never committed)
+data/
+models/
+*.gguf
+*.safetensors
+*.tgz
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
