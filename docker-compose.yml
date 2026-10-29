@@ -25,5 +25,16 @@ services:
       db:
         condition: service_healthy
 
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_USE_MOCKS: "true"
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+
 volumes:
   db-data:
+

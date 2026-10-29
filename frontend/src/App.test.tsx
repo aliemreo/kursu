@@ -1,17 +1,20 @@
 import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it } from "vitest";
 
 import App from "./App";
+import { AuthProvider } from "./features/auth/AuthContext";
 
 describe("App", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  it("redirects a signed-out user to the login page", async () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
 
-  it("shows the title and the backend status", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
-
-    render(<App />);
-
-    expect(screen.getByRole("heading", { name: "Kürsü" })).toBeTruthy();
-    expect(await screen.findByText("Sunucu çalışıyor")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Giriş yap" })).toBeInTheDocument();
   });
 });

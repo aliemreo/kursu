@@ -1,27 +1,45 @@
-import { useEffect, useState } from "react";
-
-type ApiStatus = "checking" | "ok" | "unreachable";
-
-const statusText: Record<ApiStatus, string> = {
-  checking: "Sunucu kontrol ediliyor…",
-  ok: "Sunucu çalışıyor",
-  unreachable: "Sunucuya bağlanılamadı",
-};
+import { Link, Route, Routes } from 'react-router-dom';
+import { AppLayout } from './components/layout/AppLayout';
+import { MockBanner } from './components/layout/MockBanner';
+import { ProtectedRoute } from './components/layout/ProtectedRoute';
+import { LoginPage } from './features/auth/LoginPage';
+import { RegisterPage } from './features/auth/RegisterPage';
+import { DashboardPage } from './features/dashboard/DashboardPage';
+import { DebatePage } from './features/debate/DebatePage';
+import { ResultsPage } from './features/results/ResultsPage';
+import { TopicSelectPage } from './features/topics/TopicSelectPage';
 
 export default function App() {
-  const [status, setStatus] = useState<ApiStatus>("checking");
-
-  useEffect(() => {
-    fetch("/api/v1/health")
-      .then((response) => setStatus(response.ok ? "ok" : "unreachable"))
-      .catch(() => setStatus("unreachable"));
-  }, []);
-
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 640, margin: "4rem auto" }}>
-      <h1>Kürsü</h1>
-      <p>Meclis münazara oyunu: yapay zekâ rakibe karşı tartış, bağımsız hakem değerlendirsin.</p>
-      <p role="status">{statusText[status]}</p>
-    </main>
+    <>
+      <MockBanner />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+
+        <Route element={<ProtectedRoute />}>
+          <Route element={<AppLayout />}>
+            <Route index element={<DashboardPage />} />
+            <Route path="games/new" element={<TopicSelectPage />} />
+            <Route path="games/:gameId" element={<DebatePage />} />
+            <Route path="games/:gameId/results" element={<ResultsPage />} />
+          </Route>
+        </Route>
+
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+    </>
+  );
+}
+
+function NotFoundPage() {
+  return (
+    <div className="auth-page">
+      <section className="auth-card">
+        <h1>Sayfa bulunamadı</h1>
+        <p className="muted">Aradığınız sayfa mevcut değil veya taşınmış olabilir.</p>
+        <Link className="btn btn--primary btn--block" to="/">Ana sayfaya dön</Link>
+      </section>
+    </div>
   );
 }

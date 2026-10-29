@@ -1,33 +1,69 @@
-# Environment and secrets
+
+# ===== Environment and secrets =====
 .env
 .env.*
 !.env.example
+backend/.env
+frontend/.env
+frontend/.env.*
+!backend/.env.example
+!frontend/.env.example
 
-# Python
+# ===== Python / FastAPI =====
 __pycache__/
 *.py[cod]
+*.pyc
 .venv/
 venv/
+env/
 .pytest_cache/
+.mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
 build/
 dist/
 
-# Node
+# ===== Node / Frontend / Vite =====
 node_modules/
+frontend/node_modules/
 frontend/dist/
+frontend/coverage/
+frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/.eslintcache
 *.tsbuildinfo
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# Data and models (never committed)
+# ===== Database =====
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+pgdata/
+
+# ===== Docker =====
+docker-compose.override.yml
+*.log
+
+# ===== Data and machine learning models =====
 data/
 models/
 *.gguf
 *.safetensors
 *.tgz
 
-# Editors and OS
+# ===== Editors and IDEs =====
 .vscode/
 .idea/
+*.swp
+
+# ===== Operating system =====
 .DS_Store
 Thumbs.db
+desktop.ini
