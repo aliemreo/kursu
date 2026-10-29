@@ -36,6 +36,7 @@ docker compose up -d db              # PostgreSQL 16
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+alembic upgrade head                 # create or update the database tables
 uvicorn app.main:app --reload        # http://localhost:8000/docs
 
 cd ../frontend

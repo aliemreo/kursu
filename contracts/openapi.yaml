@@ -27,8 +27,13 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/Credentials" }
       responses:
-        "201": { description: Account created }
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
         "409": { description: Email already registered }
+        "422": { description: Invalid email or password shorter than 8 characters }
   /auth/login:
     post:
       summary: Log in and receive an access token
@@ -44,6 +49,17 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Token" }
         "401": { description: Wrong email or password }
+  /auth/me:
+    get:
+      summary: The logged-in user
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { description: Missing, invalid or expired token }
   /topics:
     get:
       summary: List playable debate topics
@@ -152,6 +168,13 @@ components:
       properties:
         access_token: { type: string }
         token_type: { type: string, example: bearer }
+    User:
+      type: object
+      required: [id, email, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time }
     Topic:
       type: object
       required: [id, title, motion]
