@@ -1,11 +1,14 @@
 openapi: 3.1.0
 info:
   title: Kürsü API
-  version: 0.1.0-draft
+  version: 0.2.0-draft
   description: >
     Draft contract for WBS-1.2. Field names and endpoints will be refined during the
     API contract work; any change is made here first, in the same pull request as the code.
     Game metrics are a configurable list, so their number and names are not fixed here.
+    A game has one or more sessions; each session debates one topic over a fixed number of
+    rounds. A round is one player turn followed by one opponent turn. After the last round
+    the judge evaluates the session, and the next session starts or the game finishes.
 servers:
   - url: http://localhost:8000/api/v1
 paths:
@@ -72,44 +75,62 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Topic" }
   /games:
+    get:
+      summary: The player's own games, newest first
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Game list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/GameSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       summary: Start a new game
+      description: One session is created per entry in `sessions`, in order.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [session_count]
-              properties:
-                session_count: { type: integer, minimum: 1, maximum: 10 }
+            schema: { $ref: "#/components/schemas/CreateGameRequest" }
       responses:
         "201":
-          description: Game created
+          description: Game created; session 1 is in progress
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Game" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
   /games/{game_id}:
     get:
-      summary: Current game state, including metrics
+      summary: Current game state, including sessions, transcripts and metrics
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: game_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/GameId" }
       responses:
         "200":
           description: Game state
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Game" }
-        "404": { description: Game not found or not owned by the player }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /games/{game_id}/sessions/{session_no}/turns:
     post:
       summary: Submit the player's turn and receive the opponent's reply
+      description: >
+        Plays one round. If it was the session's last round, the judge evaluates the session
+        before the response is returned, and `session_finished` is true. If the opponent or the
+        judge model fails, nothing is stored and the player can resend the same turn. A judge
+        report that fails validation is not an error: the verdict is stored with
+        `applied: false` and the metrics are kept.
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: game_id, in: path, required: true, schema: { type: string, format: uuid } }
-        - { name: session_no, in: path, required: true, schema: { type: integer, minimum: 1 } }
+        - { $ref: "#/components/parameters/GameId" }
+        - { $ref: "#/components/parameters/SessionNo" }
       requestBody:
         required: true
         content:
@@ -118,36 +139,69 @@ paths:
               type: object
               required: [text]
               properties:
-                text: { type: string, maxLength: 4000 }
+                text: { type: string, minLength: 1, maxLength: 4000 }
       responses:
         "201":
           description: Player turn stored and opponent turn generated
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  player_turn: { $ref: "#/components/schemas/Turn" }
-                  opponent_turn: { $ref: "#/components/schemas/Turn" }
-        "409": { description: "Not the player's turn, or the session has ended" }
+              schema: { $ref: "#/components/schemas/TurnResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503":
+          description: The opponent or judge model is unavailable; nothing was stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /games/{game_id}/sessions/{session_no}/verdict:
     get:
       summary: Judge verdict for a finished session
       security: [{ bearerAuth: [] }]
       parameters:
-        - { name: game_id, in: path, required: true, schema: { type: string, format: uuid } }
-        - { name: session_no, in: path, required: true, schema: { type: integer, minimum: 1 } }
+        - { $ref: "#/components/parameters/GameId" }
+        - { $ref: "#/components/parameters/SessionNo" }
       responses:
         "200":
           description: Verdict and the metric changes that were applied
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Verdict" }
-        "409": { description: Session not finished yet }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    GameId: { name: game_id, in: path, required: true, schema: { type: string, format: uuid } }
+    SessionNo: { name: session_no, in: path, required: true, schema: { type: integer, minimum: 1 } }
+  responses:
+    Unauthorized:
+      description: Missing, invalid or expired token, or wrong email or password
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found, or not owned by the player
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: The request does not fit the current state (e.g. not the current session)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: The request body or parameters are invalid (FastAPI validation format)
   schemas:
+    Error:
+      type: object
+      description: FastAPI's error body. Validation errors (422) carry a list in `detail` instead.
+      required: [detail]
+      properties:
+        detail: { type: string, example: Session 2 is in progress }
     Health:
       type: object
       required: [status, version]
@@ -175,16 +229,24 @@ components:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         created_at: { type: string, format: date-time }
+    Side:
+      type: string
+      enum: [for, against]
+      description: Side of the motion. The opponent always takes the other side.
     Topic:
       type: object
-      required: [id, title, motion]
+      required: [id, title, motion, positions]
       properties:
         id: { type: string }
         title: { type: string }
         motion: { type: string, description: The policy statement being debated }
         positions:
-          type: array
-          items: { type: string }
+          type: object
+          required: [for, against]
+          description: The policy position each side defends
+          properties:
+            for: { type: string }
+            against: { type: string }
     Metric:
       type: object
       required: [id, name, value, min, max]
@@ -194,29 +256,92 @@ components:
         value: { type: number }
         min: { type: number }
         max: { type: number }
-    Game:
+    CreateGameRequest:
       type: object
-      required: [id, status, session_count, current_session, metrics]
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: object
+            required: [topic_id, player_side]
+            properties:
+              topic_id: { type: string }
+              player_side: { $ref: "#/components/schemas/Side" }
+    GameSummary:
+      type: object
+      required: [id, status, session_count, current_session, created_at]
       properties:
         id: { type: string, format: uuid }
         status: { type: string, enum: [active, finished] }
         session_count: { type: integer }
         current_session: { type: integer }
+        final_score: { type: [number, "null"] }
+        created_at: { type: string, format: date-time }
+    Game:
+      type: object
+      required: [id, status, session_count, current_session, metrics, sessions, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [active, finished] }
+        session_count: { type: integer }
+        current_session:
+          type: integer
+          description: Number of the session in progress; the last session once the game is finished
         metrics:
           type: array
           items: { $ref: "#/components/schemas/Metric" }
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/Session" }
         final_score: { type: [number, "null"] }
+        created_at: { type: string, format: date-time }
+    Session:
+      type: object
+      required: [session_no, topic_id, player_side, status, max_rounds, turns, verdict_available]
+      properties:
+        session_no: { type: integer, minimum: 1 }
+        topic_id: { type: string }
+        player_side: { $ref: "#/components/schemas/Side" }
+        status: { type: string, enum: [pending, in_progress, finished] }
+        max_rounds: { type: integer, description: Player turns in this session; each gets one opponent reply }
+        turns:
+          type: array
+          items: { $ref: "#/components/schemas/Turn" }
+        verdict_available:
+          type: boolean
+          description: True once the judge has run; fetch it from the verdict endpoint
     Turn:
       type: object
-      required: [id, speaker, text]
+      required: [id, speaker, text, created_at, citations]
       properties:
         id: { type: string }
         speaker: { type: string, enum: [player, opponent] }
         text: { type: string }
+        created_at: { type: string, format: date-time }
         citations:
           type: array
           description: Only filled when retrieval grounding is enabled
-          items: { type: string }
+          items: { $ref: "#/components/schemas/Citation" }
+    Citation:
+      type: object
+      description: A ParlaMint-TR speech the opponent turn relies on
+      required: [speech_id, excerpt]
+      properties:
+        speech_id: { type: string, description: ParlaMint-TR utterance identifier }
+        speaker: { type: [string, "null"], description: Anonymised or role label, never a party }
+        date: { type: [string, "null"], format: date }
+        excerpt: { type: string }
+    TurnResult:
+      type: object
+      required: [player_turn, opponent_turn, session_finished, game_finished]
+      properties:
+        player_turn: { $ref: "#/components/schemas/Turn" }
+        opponent_turn: { $ref: "#/components/schemas/Turn" }
+        session_finished: { type: boolean, description: True when this was the last round and the verdict is ready }
+        game_finished: { type: boolean }
     JudgeQualitative:
       type: object
       description: Stage 1, transcript-level assessment
@@ -227,17 +352,21 @@ components:
         narrative: { type: string }
         categories:
           type: array
-          description: Choices from the topic's predefined category options
+          description: >
+            Choices from the topic's predefined category options. `choice_id: other` marks an
+            outcome the options do not cover; it requires an `explanation`.
           items:
             type: object
             required: [category_id, choice_id]
             properties:
               category_id: { type: string }
               choice_id: { type: string }
+              explanation: { type: [string, "null"] }
         evidence:
           type: array
           items:
             type: object
+            required: [turn_id, quote]
             properties:
               turn_id: { type: string }
               quote: { type: string }
@@ -254,14 +383,23 @@ components:
             properties:
               metric_id: { type: string }
               delta: { type: number }
-              reason: { type: string }
+              reason: { type: [string, "null"] }
     Verdict:
       type: object
-      required: [qualitative, quantitative, applied]
+      required: [session_no, qualitative, quantitative, applied, metrics_before, metrics_after, judge_model]
       properties:
+        session_no: { type: integer }
         qualitative: { $ref: "#/components/schemas/JudgeQualitative" }
         quantitative: { $ref: "#/components/schemas/JudgeQuantitative" }
         applied:
           type: boolean
           description: False when validation rejected the proposal and the game state was kept
         rejection_reason: { type: [string, "null"] }
+        metrics_before:
+          type: array
+          items: { $ref: "#/components/schemas/Metric" }
+        metrics_after:
+          type: array
+          description: Equal to metrics_before when applied is false
+          items: { $ref: "#/components/schemas/Metric" }
+        judge_model: { type: string, description: Model (and prompt version) that produced the verdict }
