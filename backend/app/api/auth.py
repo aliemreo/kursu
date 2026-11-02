@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +19,17 @@ class Credentials(BaseModel):
     password: str = Field(min_length=8)
 
 
+# ASCII only: Turkish İ/ı do not round-trip through lower(), which would break uniqueness.
+Username = Annotated[
+    str,
+    StringConstraints(min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_.]+$", to_lower=True),
+]
+
+
+class Registration(Credentials):
+    username: Username
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -28,18 +40,32 @@ class UserOut(BaseModel):
 
     id: uuid.UUID
     email: EmailStr
+    username: str
     created_at: datetime
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register(credentials: Credentials, db: DbSession) -> User:
-    user = User(email=credentials.email.lower(), password_hash=hash_password(credentials.password))
+def register(registration: Registration, db: DbSession) -> User:
+    email = registration.email.lower()
+    if db.scalar(select(User.id).where(User.email == email)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
+    if db.scalar(select(User.id).where(User.username == registration.username)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Username already taken")
+
+    user = User(
+        email=email,
+        username=registration.username,
+        password_hash=hash_password(registration.password),
+    )
     db.add(user)
     try:
         db.commit()
     except IntegrityError:
+        # A concurrent registration took the email or the username first.
         db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered") from None
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Email already registered or username already taken"
+        ) from None
     db.refresh(user)
     return user
 

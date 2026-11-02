@@ -18,7 +18,8 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: ruff check .
+      - run: ruff check . ../tests
+      # Runs the tests in ../tests/backend (see testpaths in pyproject.toml).
       - run: pytest
 
   frontend:

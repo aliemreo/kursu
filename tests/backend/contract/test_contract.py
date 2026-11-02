@@ -4,7 +4,7 @@ import yaml
 
 from app.main import app
 
-CONTRACT = Path(__file__).parents[2] / "contracts" / "openapi.yaml"
+CONTRACT = Path(__file__).parents[3] / "contracts" / "openapi.yaml"
 METHODS = {"get", "post", "put", "patch", "delete"}
 
 

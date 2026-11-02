@@ -38,4 +38,6 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# Tests live in the repository-level tests/ folder; see tests/README.md.
+testpaths = ["../tests/backend"]
+addopts = "--import-mode=importlib"
