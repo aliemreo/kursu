@@ -13,7 +13,10 @@ PASSWORD = secrets.token_urlsafe(12)
 
 
 def auth_headers(client: TestClient, email: str = "oyuncu@example.com") -> dict[str, str]:
-    client.post("/api/v1/auth/register", json={"email": email, "password": PASSWORD})
+    username = email.split("@")[0]
+    client.post(
+        "/api/v1/auth/register", json={"email": email, "password": PASSWORD, "username": username}
+    )
     token = client.post(
         "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
     ).json()["access_token"]

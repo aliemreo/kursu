@@ -2,6 +2,7 @@ import secrets
 import uuid
 from datetime import timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -9,13 +10,18 @@ from app.models import User
 from app.security import create_access_token
 
 EMAIL = "oyuncu@example.com"
+USERNAME = "oyuncu"
 # Generated per run so that no password-like literal is committed (secret scanners flag them).
 PASSWORD = secrets.token_urlsafe(12)
 OTHER_PASSWORD = secrets.token_urlsafe(12)
 
 
-def register(client: TestClient, email: str = EMAIL, password: str = PASSWORD):
-    return client.post("/api/v1/auth/register", json={"email": email, "password": password})
+def register(
+    client: TestClient, email: str = EMAIL, password: str = PASSWORD, username: str = USERNAME
+):
+    return client.post(
+        "/api/v1/auth/register", json={"email": email, "password": password, "username": username}
+    )
 
 
 def login(client: TestClient, email: str = EMAIL, password: str = PASSWORD):
@@ -33,20 +39,45 @@ def test_register_returns_user_without_password(client: TestClient) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["email"] == EMAIL
-    assert set(body) == {"id", "email", "created_at"}
+    assert body["username"] == USERNAME
+    assert set(body) == {"id", "email", "username", "created_at"}
+
+
+def test_register_stores_username_in_lowercase(client: TestClient) -> None:
+    register(client, username="Oyuncu_1.TR")
+    token = login(client).json()["access_token"]
+
+    assert me(client, token).json()["username"] == "oyuncu_1.tr"
 
 
 def test_register_rejects_duplicate_email_case_insensitively(client: TestClient) -> None:
     register(client)
 
-    response = register(client, email=EMAIL.upper())
+    response = register(client, email=EMAIL.upper(), username="baska")
 
     assert response.status_code == 409
+    assert response.json()["detail"] == "Email already registered"
+
+
+def test_register_rejects_duplicate_username_case_insensitively(client: TestClient) -> None:
+    register(client)
+
+    response = register(client, email="baska@example.com", username=USERNAME.upper())
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Username already taken"
 
 
 def test_register_validates_input(client: TestClient) -> None:
     assert register(client, password=PASSWORD[:7]).status_code == 422
     assert register(client, email="not-an-email").status_code == 422
+    missing_username = {"email": EMAIL, "password": PASSWORD}
+    assert client.post("/api/v1/auth/register", json=missing_username).status_code == 422
+
+
+@pytest.mark.parametrize("username", ["ab", "a" * 31, "iki kelime", "türkçe", "x@y", ""])
+def test_register_rejects_invalid_username(client: TestClient, username: str) -> None:
+    assert register(client, username=username).status_code == 422
 
 
 def test_login_token_gives_access_to_me(client: TestClient) -> None:

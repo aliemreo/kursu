@@ -28,15 +28,15 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Credentials" }
+            schema: { $ref: "#/components/schemas/Registration" }
       responses:
         "201":
           description: Account created
           content:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
-        "409": { description: Email already registered }
-        "422": { description: Invalid email or password shorter than 8 characters }
+        "409": { description: Email already registered, or username already taken }
+        "422": { description: Invalid email, username or password shorter than 8 characters }
   /auth/login:
     post:
       summary: Log in and receive an access token
@@ -216,6 +216,21 @@ components:
       properties:
         email: { type: string, format: email }
         password: { type: string, minLength: 8 }
+    Username:
+      type: string
+      minLength: 3
+      maxLength: 30
+      pattern: "^[A-Za-z0-9_.]+$"
+      description: >
+        Public name shown instead of the email, e.g. on the leaderboard. Unique regardless of
+        case and stored in lowercase. Login still uses the email.
+    Registration:
+      type: object
+      required: [email, password, username]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        username: { $ref: "#/components/schemas/Username" }
     Token:
       type: object
       required: [access_token, token_type]
@@ -224,10 +239,11 @@ components:
         token_type: { type: string, example: bearer }
     User:
       type: object
-      required: [id, email, created_at]
+      required: [id, email, username, created_at]
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
+        username: { type: string, description: Lowercase }
         created_at: { type: string, format: date-time }
     Side:
       type: string
