@@ -1,13 +1,15 @@
 import secrets
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import User
-from app.security import create_access_token
+from app.security import ALGORITHM, create_access_token
 
 EMAIL = "oyuncu@example.com"
 USERNAME = "oyuncu"
@@ -33,14 +35,26 @@ def me(client: TestClient, token: str | None):
     return client.get("/api/v1/auth/me", headers=headers)
 
 
+def logout(client: TestClient, token: str | None):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    return client.post("/api/v1/auth/logout", headers=headers)
+
+
 def test_register_returns_user_without_password(client: TestClient) -> None:
     response = register(client)
 
     assert response.status_code == 201
     body = response.json()
-    assert body["email"] == EMAIL
-    assert body["username"] == USERNAME
-    assert set(body) == {"id", "email", "username", "created_at"}
+    assert body["token_type"] == "bearer"
+    assert body["user"]["email"] == EMAIL
+    assert body["user"]["username"] == USERNAME
+    assert set(body["user"]) == {"id", "email", "username", "created_at"}
+
+
+def test_register_logs_the_user_in(client: TestClient) -> None:
+    token = register(client).json()["access_token"]
+
+    assert me(client, token).json()["username"] == USERNAME
 
 
 def test_register_stores_username_in_lowercase(client: TestClient) -> None:
@@ -87,6 +101,7 @@ def test_login_token_gives_access_to_me(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["token_type"] == "bearer"
+    assert response.json()["user"]["username"] == USERNAME
     me_response = me(client, response.json()["access_token"])
     assert me_response.status_code == 200
     assert me_response.json()["email"] == EMAIL
@@ -119,10 +134,52 @@ def test_me_rejects_tampered_token(client: TestClient) -> None:
 
 
 def test_me_rejects_expired_token(client: TestClient) -> None:
-    user_id = uuid.UUID(register(client).json()["id"])
-    expired = create_access_token(user_id, expires_delta=timedelta(minutes=-1))
+    user_id = uuid.UUID(register(client).json()["user"]["id"])
+    expired = create_access_token(user_id, 0, expires_delta=timedelta(minutes=-1))
 
     assert me(client, expired).status_code == 401
+
+
+def test_me_rejects_token_without_version(client: TestClient) -> None:
+    """Tokens issued before logout existed carry no version and must not stay valid."""
+    user_id = register(client).json()["user"]["id"]
+    claims = {"sub": user_id, "iat": datetime.now(UTC), "exp": datetime.now(UTC) + timedelta(1)}
+    unversioned = jwt.encode(claims, settings.jwt_secret, algorithm=ALGORITHM)
+
+    assert me(client, unversioned).status_code == 401
+
+
+def test_logout_invalidates_the_token(client: TestClient) -> None:
+    token = register(client).json()["access_token"]
+
+    assert logout(client, token).status_code == 204
+    assert me(client, token).status_code == 401
+    assert logout(client, token).status_code == 401
+
+
+def test_logout_invalidates_tokens_on_all_devices(client: TestClient) -> None:
+    laptop = register(client).json()["access_token"]
+    user_id = uuid.UUID(me(client, laptop).json()["id"])
+    # A different expiry guarantees a distinct token even within the same second.
+    phone = create_access_token(user_id, 0, expires_delta=timedelta(hours=2))
+    assert phone != laptop
+    assert me(client, phone).status_code == 200
+
+    logout(client, laptop)
+
+    assert me(client, phone).status_code == 401
+
+
+def test_login_after_logout_gives_a_working_token(client: TestClient) -> None:
+    logout(client, register(client).json()["access_token"])
+
+    token = login(client).json()["access_token"]
+
+    assert me(client, token).status_code == 200
+
+
+def test_logout_requires_a_token(client: TestClient) -> None:
+    assert logout(client, None).status_code == 401
 
 
 def test_me_rejects_token_of_deleted_user(client: TestClient, db_session: Session) -> None:

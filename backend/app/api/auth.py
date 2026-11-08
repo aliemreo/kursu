@@ -30,11 +30,6 @@ class Registration(Credentials):
     username: Username
 
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,8 +39,24 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register(registration: Registration, db: DbSession) -> User:
+class AuthResult(BaseModel):
+    """Returned by register and login, so the client needs no extra /auth/me call."""
+
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+def auth_result(user: User) -> AuthResult:
+    return AuthResult(
+        access_token=create_access_token(user.id, user.token_version),
+        user=UserOut.model_validate(user),
+    )
+
+
+@router.post("/register", response_model=AuthResult, status_code=status.HTTP_201_CREATED)
+def register(registration: Registration, db: DbSession) -> AuthResult:
+    """Create an account and log it in."""
     email = registration.email.lower()
     if db.scalar(select(User.id).where(User.email == email)):
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
@@ -67,11 +78,11 @@ def register(registration: Registration, db: DbSession) -> User:
             status.HTTP_409_CONFLICT, "Email already registered or username already taken"
         ) from None
     db.refresh(user)
-    return user
+    return auth_result(user)
 
 
-@router.post("/login", response_model=Token)
-def login(credentials: Credentials, db: DbSession) -> Token:
+@router.post("/login", response_model=AuthResult)
+def login(credentials: Credentials, db: DbSession) -> AuthResult:
     user = db.scalar(select(User).where(User.email == credentials.email.lower()))
     # Same answer for an unknown email and a wrong password, so accounts cannot be probed.
     if user is None or not verify_password(credentials.password, user.password_hash):
@@ -80,7 +91,15 @@ def login(credentials: Credentials, db: DbSession) -> Token:
             "Wrong email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return Token(access_token=create_access_token(user.id))
+    return auth_result(user)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(user: CurrentUser, db: DbSession) -> None:
+    """Invalidate every token of the user, on all devices."""
+    # Incremented in SQL, so two logouts at the same time both count.
+    user.token_version = User.token_version + 1
+    db.commit()
 
 
 @router.get("/me", response_model=UserOut)

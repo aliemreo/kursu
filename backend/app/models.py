@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,6 +30,9 @@ class User(Base):
     # Public name, shown instead of the email; also stored lowercased.
     username: Mapped[str] = mapped_column(String(30), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    # Copied into every access token; logout increments it, which invalidates every token
+    # issued before (on all devices).
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
