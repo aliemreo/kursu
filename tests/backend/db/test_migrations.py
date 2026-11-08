@@ -89,3 +89,23 @@ def test_username_migration_names_existing_users(alembic_config: Config) -> None
             assert rows.all() == [("a@example.com", "player1"), ("b@example.com", "player2")]
     finally:
         engine.dispose()
+
+
+def test_token_version_migration_starts_existing_users_at_zero(alembic_config: Config) -> None:
+    """0004 makes token_version required, so accounts created before it need a value."""
+    command.upgrade(alembic_config, "0003")
+    engine = create_engine(alembic_config.get_main_option("sqlalchemy.url"))
+    insert = text(
+        "INSERT INTO users (id, email, username, password_hash, created_at) "
+        "VALUES (:id, 'a@example.com', 'a', 'hash', '2026-10-01')"
+    ).bindparams(bindparam("id", type_=Uuid()))
+    try:
+        with engine.begin() as connection:
+            connection.execute(insert, {"id": uuid.uuid4()})
+
+        command.upgrade(alembic_config, "head")
+
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT token_version FROM users")).all() == [(0,)]
+    finally:
+        engine.dispose()

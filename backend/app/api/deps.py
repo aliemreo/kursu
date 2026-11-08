@@ -26,11 +26,12 @@ def get_current_user(
     if credentials is None:
         raise unauthorized
     try:
-        user_id = decode_access_token(credentials.credentials)
+        claims = decode_access_token(credentials.credentials)
     except InvalidTokenError:
         raise unauthorized from None
-    user = db.get(User, user_id)
-    if user is None:
+    user = db.get(User, claims.user_id)
+    # A version behind the user's means the token was issued before a logout.
+    if user is None or user.token_version != claims.token_version:
         raise unauthorized
     return user
 
