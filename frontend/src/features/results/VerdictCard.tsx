@@ -1,56 +1,124 @@
 import { cx } from '../../lib/cx';
-import { METRIC_LABELS, SPEAKER_LABELS, VICTORY_LABELS } from '../../lib/labels';
-import type { GameResultSession } from '../../types/api';
-import { METRIC_KEYS } from './MetricHistoryChart';
+import {
+  CATEGORY_LABELS,
+  CHOICE_LABELS,
+  RESULT_KIND_LABELS,
+  SIDE_LABELS,
+  VICTORY_LABELS,
+  WINNER_LABELS,
+  formatDelta,
+} from '../../lib/labels';
+import type { Side, Verdict } from '../../types/api';
 
-function formatDelta(delta: number): string {
-  if (delta > 0) return `+${delta}`;
-  if (delta < 0) return `${delta}`;
-  return '0';
+interface VerdictCardProps {
+  verdict: Verdict;
+  topicTitle: string;
+  playerSide: Side | null;
+  /** Karar ilk kez açıklanıyorsa daha belirgin gösterilir. */
+  highlight?: boolean;
 }
 
-export function VerdictCard({ result }: { result: GameResultSession }) {
-  const { verdict } = result;
+/** Bir oturumun iki aşamalı hakem kararı: niteliksel değerlendirme ve metrik değişimleri. */
+export function VerdictCard({ verdict, topicTitle, playerSide, highlight = false }: VerdictCardProps) {
+  const { qualitative } = verdict;
+  const titleId = `verdict-${verdict.session_no}`;
 
   return (
-    <article className="card verdict" aria-labelledby={`verdict-${result.sessionId}`}>
-      <div className="verdict__head">
+    <article
+      className={cx('card verdict', `verdict--${qualitative.winner}`, highlight && 'verdict--highlight')}
+      aria-labelledby={titleId}
+    >
+      <header className="verdict__band">
         <div>
-          <p className="verdict__meta">Tur {result.index + 1}</p>
-          <h3 id={`verdict-${result.sessionId}`}>{result.topicTitle}</h3>
+          <p className="verdict__meta">
+            Oturum {verdict.session_no} · {topicTitle}
+            {playerSide && ` · Tarafınız: ${SIDE_LABELS[playerSide]}`}
+          </p>
+          <h3 id={titleId} className="verdict__title">
+            {WINNER_LABELS[qualitative.winner]}
+          </h3>
         </div>
-        <div className="row">
-          <span className="badge badge--winner">{SPEAKER_LABELS[verdict.winner]} kazandı</span>
-          <span className="badge badge--pending">{VICTORY_LABELS[verdict.victoryStrength]}</span>
-        </div>
-      </div>
+        {qualitative.winner !== 'draw' && (
+          <span className="verdict__strength">{VICTORY_LABELS[qualitative.victory_strength]}</span>
+        )}
+      </header>
 
-      <p>{verdict.outcomeNarrative}</p>
+      <section className="verdict__stage" aria-label="1. aşama: niteliksel değerlendirme">
+        <p className="verdict__stage-title">
+          <span className="verdict__step">1</span> Hakemin değerlendirmesi
+        </p>
+        <p className="verdict__narrative">{qualitative.narrative}</p>
 
-      <ul className="chips" aria-label="Değerlendirme kategorileri">
-        {verdict.categories.map((category) => (
-          <li key={category}>{category}</li>
-        ))}
-      </ul>
+        {qualitative.categories.length > 0 && (
+          <ul className="chips" aria-label="Sonuç kategorileri">
+            {qualitative.categories.map((c) => (
+              <li key={c.category_id} title={c.explanation ?? undefined}>
+                <span className="chips__key">{CATEGORY_LABELS[c.category_id] ?? c.category_id}</span>
+                {CHOICE_LABELS[c.choice_id] ?? c.choice_id}
+              </li>
+            ))}
+          </ul>
+        )}
 
-      <ul className="delta-list" aria-label="Metrik değişimleri">
-        {METRIC_KEYS.map((key) => {
-          const before = verdict.metricsBefore[key];
-          const after = verdict.metricsAfter[key];
-          const delta = after - before;
-          return (
-            <li key={key} className="delta-row">
-              <span>{METRIC_LABELS[key]}</span>
-              <span>
-                {before} → {after}
+        {qualitative.evidence && qualitative.evidence.length > 0 && (
+          <div className="evidence">
+            <p className="evidence__title">Hakemin dayandığı alıntılar</p>
+            {qualitative.evidence.map((e) => (
+              <blockquote key={e.turn_id}>{e.quote}</blockquote>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="verdict__stage" aria-label="2. aşama: metrik değişimleri">
+        <p className="verdict__stage-title">
+          <span className="verdict__step">2</span> Metriklere etkisi
+        </p>
+        <p className="muted">
+          {RESULT_KIND_LABELS[verdict.result_kind]}
+          {verdict.adopted_side
+            ? ` · Kabul edilen politika: ${SIDE_LABELS[verdict.adopted_side]}`
+            : ' · Politika değişmedi'}
+        </p>
+        {verdict.rejection_reason && (
+          <p className="field__hint">Öneri uygulanmadı: {verdict.rejection_reason}</p>
+        )}
+
+        <ul className="delta-list" aria-label="Metrik değişimleri">
+          {verdict.metric_changes.map((change) => (
+            <li key={change.metric_id} className="delta-row">
+              <span className="delta-row__name">
+                {change.name}
+                {change.capped && (
+                  <span className="badge badge--capped" title="Metriğin sınırı önerilen değişimi kesti">
+                    sınırlandı
+                  </span>
+                )}
               </span>
-              <span className={cx('delta', delta > 0 && 'delta--up', delta < 0 && 'delta--down')}>
-                {formatDelta(delta)}
+              <span className="delta-row__values">
+                {change.before} → <strong>{change.after}</strong>
+                {change.proposed_delta !== null && change.proposed_delta !== change.applied_delta && (
+                  <span className="muted"> (önerilen {formatDelta(change.proposed_delta)})</span>
+                )}
+              </span>
+              <span
+                className={cx(
+                  'delta',
+                  change.applied_delta > 0 && 'delta--up',
+                  change.applied_delta < 0 && 'delta--down',
+                )}
+              >
+                {formatDelta(change.applied_delta)}
               </span>
             </li>
-          );
-        })}
-      </ul>
+          ))}
+        </ul>
+      </section>
+
+      <p className="verdict__footer">
+        Kurgusal oyun sonucu; gerçek politika etkileri hakkında tahmin değildir · Hakem:{' '}
+        {verdict.judge_model}
+      </p>
     </article>
   );
 }

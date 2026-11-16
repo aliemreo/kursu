@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation } from 'react-router-dom';
+import { AuthLayout } from '../../components/layout/AuthLayout';
 import { Alert } from '../../components/ui/Alert';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -40,52 +41,47 @@ export function LoginPage() {
   }
 
   return (
-    <div className="auth-page">
-      <section className="auth-card" aria-labelledby="login-title">
-        <header className="auth-card__header">
-          <span className="brand__mark brand__mark--lg" aria-hidden="true">
-            K
-          </span>
-          <h1 id="login-title">Giriş yap</h1>
-          <p>Münazara oyunlarınıza kaldığınız yerden devam edin.</p>
-        </header>
-
-        {isMockMode && (
-          <Alert tone="info">
-            Demo hesap: <strong>demo@kursu.test</strong> / <strong>demo12345</strong>
-          </Alert>
-        )}
-
-        {formError && <Alert tone="error">{formError}</Alert>}
-
-        <form className="stack" onSubmit={handleSubmit} noValidate>
-          <Input
-            label="E-posta"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            error={fieldErrors.email}
-            disabled={submitting}
-          />
-          <Input
-            label="Şifre"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            error={fieldErrors.password}
-            disabled={submitting}
-          />
-          <Button type="submit" block loading={submitting}>
-            {submitting ? 'Giriş yapılıyor…' : 'Giriş yap'}
-          </Button>
-        </form>
-
-        <p className="auth-card__footer">
+    <AuthLayout
+      title="Giriş yap"
+      subtitle="Münazaralarınıza kaldığınız yerden devam edin."
+      footer={
+        <>
           Hesabınız yok mu? <Link to="/register">Kayıt olun</Link>
-        </p>
-      </section>
-    </div>
+        </>
+      }
+    >
+      {isMockMode && (
+        <Alert tone="info">
+          Demo hesap: <strong>demo@kursu.test</strong> / <strong>demo12345</strong>
+        </Alert>
+      )}
+
+      {formError && <Alert tone="error">{formError}</Alert>}
+
+      <form className="stack" onSubmit={handleSubmit} noValidate>
+        <Input
+          label="E-posta"
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          error={fieldErrors.email}
+          disabled={submitting}
+          autoFocus
+        />
+        <Input
+          label="Şifre"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          error={fieldErrors.password}
+          disabled={submitting}
+        />
+        <Button type="submit" block loading={submitting}>
+          {submitting ? 'Giriş yapılıyor…' : 'Giriş yap'}
+        </Button>
+      </form>
+    </AuthLayout>
   );
 }

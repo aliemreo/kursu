@@ -6,8 +6,11 @@ export function MockBanner() {
 
   return (
     <div className="mock-banner" role="note">
-      <strong>Mock mod açık.</strong> Veriler bu tarayıcıda saklanır ve gerçek backend'e bağlı
-      değilsiniz. Rakip yanıtları ve hakem kararları geliştirme amacıyla sahte kurallarla üretilir.
+      <span className="mock-banner__dot" aria-hidden="true" />
+      <span>
+        <strong>Mock mod</strong> · Veriler bu tarayıcıda saklanır; rakip ve hakem sahte kurallarla
+        yanıt verir.
+      </span>
     </div>
   );
 }

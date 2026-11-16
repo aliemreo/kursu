@@ -6,16 +6,17 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { UNAUTHORIZED_EVENT } from '../../lib/httpClient';
 import { tokenStorage } from '../../lib/tokenStorage';
 import { api } from '../../services';
-import type { LoginRequest, RegisterRequest, User } from '../../types/api';
+import type { Credentials, Registration, User } from '../../types/api';
 
 interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
-  login: (payload: LoginRequest) => Promise<void>;
-  register: (payload: RegisterRequest) => Promise<void>;
-  logout: () => void;
+  login: (payload: Credentials) => Promise<void>;
+  register: (payload: Registration) => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -49,23 +50,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Herhangi bir istek 401 dönerse (ör. başka cihazdan çıkış yapıldı) oturumu kapat.
+  useEffect(() => {
+    const handleUnauthorized = () => setUser(null);
+    window.addEventListener(UNAUTHORIZED_EVENT, handleUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, handleUnauthorized);
+  }, []);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
       isLoading,
       async login(payload) {
-        const response = await api.login(payload);
-        tokenStorage.set(response.accessToken);
-        setUser(response.user);
+        const result = await api.login(payload);
+        tokenStorage.set(result.access_token);
+        setUser(result.user);
       },
       async register(payload) {
-        const response = await api.register(payload);
-        tokenStorage.set(response.accessToken);
-        setUser(response.user);
+        const result = await api.register(payload);
+        tokenStorage.set(result.access_token);
+        setUser(result.user);
       },
-      logout() {
-        tokenStorage.clear();
-        setUser(null);
+      async logout() {
+        try {
+          // Backend tüm cihazlardaki token'ları geçersiz kılar.
+          await api.logout();
+        } catch {
+          /* Sunucuya ulaşılamasa da yerel oturum kapatılır. */
+        } finally {
+          tokenStorage.clear();
+          setUser(null);
+        }
       },
     }),
     [user, isLoading],

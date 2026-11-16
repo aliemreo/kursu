@@ -4,6 +4,11 @@ export function isValidEmail(value: string): boolean {
   return /^\S+@\S+\.\S+$/.test(value.trim());
 }
 
+/** Sözleşmedeki Username kuralı: 3-30 karakter, yalnızca harf, rakam, "_" ve ".". */
+export function isValidUsername(value: string): boolean {
+  return /^[A-Za-z0-9_.]{3,30}$/.test(value.trim());
+}
+
 export type LoginField = 'email' | 'password';
 
 export function validateLogin(email: string, password: string): FieldErrors<LoginField> {
@@ -17,10 +22,10 @@ export function validateLogin(email: string, password: string): FieldErrors<Logi
   return errors;
 }
 
-export type RegisterField = 'displayName' | 'email' | 'password' | 'passwordRepeat';
+export type RegisterField = 'username' | 'email' | 'password' | 'passwordRepeat';
 
 export interface RegisterValues {
-  displayName: string;
+  username: string;
   email: string;
   password: string;
   passwordRepeat: string;
@@ -28,8 +33,9 @@ export interface RegisterValues {
 
 export function validateRegister(values: RegisterValues): FieldErrors<RegisterField> {
   const errors: FieldErrors<RegisterField> = {};
-  if (values.displayName.trim().length < 2) {
-    errors.displayName = 'Ad soyad en az 2 karakter olmalıdır.';
+  if (!isValidUsername(values.username)) {
+    errors.username =
+      'Kullanıcı adı 3-30 karakter olmalı; yalnızca İngilizce harf, rakam, "_" ve "." içerebilir.';
   }
   if (!isValidEmail(values.email)) {
     errors.email = 'Geçerli bir e-posta adresi girin.';

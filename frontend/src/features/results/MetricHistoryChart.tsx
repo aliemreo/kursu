@@ -9,59 +9,58 @@ import {
   YAxis,
 } from 'recharts';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { METRIC_LABELS } from '../../lib/labels';
-import type { GameResultSession, MetricKey } from '../../types/api';
+import type { Metric, SessionResult } from '../../types/api';
 
-export const METRIC_KEYS: MetricKey[] = [
-  'social_cohesion',
-  'economic_stability',
-  'institutional_trust',
-];
-
-const METRIC_COLORS: Record<MetricKey, string> = {
-  social_cohesion: '#8b1e2d',
-  economic_stability: '#b8892b',
-  institutional_trust: '#2f5d62',
-};
+/** Metrik listesi yapılandırılabilir olduğu için renkler sırayla atanır. */
+const METRIC_COLORS = ['#722B3C', '#B59A68', '#5A3A2E', '#3F5E5A', '#8A6F9E', '#252321'];
 
 interface MetricHistoryChartProps {
-  sessions: GameResultSession[];
+  metrics: Metric[];
+  sessions: SessionResult[];
 }
 
-export function MetricHistoryChart({ sessions }: MetricHistoryChartProps) {
-  if (sessions.length === 0) {
+export function MetricHistoryChart({ metrics, sessions }: MetricHistoryChartProps) {
+  if (sessions.length === 0 || metrics.length === 0) {
     return (
       <EmptyState
         title="Grafik için veri yok"
-        description="Metrik gelişimi, en az bir tur tamamlandığında görünür."
+        description="Metrik gelişimi, en az bir oturum tamamlandığında görünür."
       />
     );
   }
 
+  const point = (name: string, pick: 'before' | 'after', session: SessionResult) => ({
+    name,
+    ...Object.fromEntries(session.metric_changes.map((c) => [c.metric_id, c[pick]])),
+  });
+
   const data = [
-    { name: 'Başlangıç', ...sessions[0].verdict.metricsBefore },
-    ...sessions.map((session) => ({
-      name: `Tur ${session.index + 1}`,
-      ...session.verdict.metricsAfter,
-    })),
+    point('Başlangıç', 'before', sessions[0]),
+    ...sessions.map((s) => point(`Oturum ${s.session_no}`, 'after', s)),
   ];
+  const min = Math.min(...metrics.map((m) => m.min));
+  const max = Math.max(...metrics.map((m) => m.max));
 
   return (
-    <div className="chart" role="img" aria-label="Oyun metriklerinin turlara göre değişimini gösteren çizgi grafiği">
+    <div
+      className="chart"
+      role="img"
+      aria-label="Oyun metriklerinin oturumlara göre değişimini gösteren çizgi grafiği"
+    >
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e4dccb" />
-          <XAxis dataKey="name" stroke="#776c5e" />
-          <YAxis domain={[0, 100]} stroke="#776c5e" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#E9DFCF" />
+          <XAxis dataKey="name" stroke="#7A6A5C" />
+          <YAxis domain={[min, max]} stroke="#7A6A5C" />
           <Tooltip />
           <Legend />
-          {METRIC_KEYS.map((key) => (
+          {metrics.map((metric, index) => (
             <Line
-              key={key}
+              key={metric.id}
               type="monotone"
-              dataKey={key}
-              name={METRIC_LABELS[key]}
-              stroke={METRIC_COLORS[key]}
+              dataKey={metric.id}
+              name={metric.name}
+              stroke={METRIC_COLORS[index % METRIC_COLORS.length]}
               strokeWidth={2.5}
               dot={{ r: 4 }}
               isAnimationActive={false}
