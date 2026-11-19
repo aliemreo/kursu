@@ -1,8 +1,11 @@
 import axios, { type AxiosError } from 'axios';
 import { env } from './env';
-import { ApiError } from './errors';
+import { ApiError, messageFor } from './errors';
 import { tokenStorage } from './tokenStorage';
 import type { ApiErrorBody } from '../types/api';
+
+/** Token geçersizleştiğinde yayınlanır; AuthContext dinleyip oturumu kapatır. */
+export const UNAUTHORIZED_EVENT = 'kursu:unauthorized';
 
 export const http = axios.create({
   baseURL: env.apiBaseUrl,
@@ -24,16 +27,12 @@ http.interceptors.response.use(
     const status = error.response?.status ?? 0;
     const body = error.response?.data;
 
-    if (status === 401) {
+    if (status === 401 && tokenStorage.get()) {
       tokenStorage.clear();
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     }
 
-    const message =
-      body?.message ??
-      (status === 0
-        ? 'Sunucuya ulaşılamadı. Bağlantınızı kontrol edin.'
-        : 'İşlem sırasında bir hata oluştu.');
-
-    return Promise.reject(new ApiError(status, body?.code ?? 'REQUEST_FAILED', message));
+    const code = body?.code ?? (status === 0 ? 'NETWORK_ERROR' : 'REQUEST_FAILED');
+    return Promise.reject(new ApiError(status, code, messageFor(status, body?.code, body?.detail)));
   },
 );
