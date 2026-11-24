@@ -3,8 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api import auth, games, health, topics
+from app.errors import ApiError, api_error_handler
 
 app = FastAPI(title="Kürsü API", version=__version__)
+app.add_exception_handler(ApiError, api_error_handler)
 
 app.add_middleware(
     CORSMiddleware,

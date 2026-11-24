@@ -10,7 +10,19 @@ from pydantic import BaseModel, ConfigDict, Field
 Side = Literal["for", "against"]
 Speaker = Literal["player", "opponent"]
 GameStatus = Literal["active", "finished"]
-SessionStatus = Literal["pending", "in_progress", "finished"]
+SessionStatus = Literal[
+    "pending",
+    "choosing_side",
+    "awaiting_player",
+    "awaiting_opponent",
+    "awaiting_evaluation",
+    "evaluation_failed",
+    "evaluated",
+    "finished",
+]
+
+# Longest player turn in characters; /game-config reports it to the client.
+MAX_TURN_LENGTH = 4000
 
 
 class Positions(BaseModel):
@@ -35,13 +47,23 @@ class Metric(BaseModel):
     max: float
 
 
-class SessionRequest(BaseModel):
-    topic_id: str
-    player_side: Side
+class GameConfig(BaseModel):
+    min_sessions: int
+    max_sessions: int
+    rounds_per_session: int
+    max_turn_length: int
+    catalog_version: str
 
 
 class CreateGameRequest(BaseModel):
-    sessions: list[SessionRequest] = Field(min_length=1, max_length=10)
+    # Strict, so true or "3" are rejected instead of converted. The range is checked by the
+    # game rules against /game-config, so that every out-of-range count answers
+    # INVALID_SESSION_COUNT.
+    session_count: int = Field(strict=True)
+
+
+class ChooseSideRequest(BaseModel):
+    side: Side
 
 
 class Citation(BaseModel):
@@ -62,33 +84,37 @@ class Turn(BaseModel):
 
 
 class Session(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     session_no: int
-    topic_id: str
-    player_side: Side
+    topic: Topic
+    player_side: Side | None
     status: SessionStatus
+    next_speaker: Speaker | None
+    rounds_played: int
     max_rounds: int
     turns: list[Turn]
     verdict_available: bool
+    adopted_side: Side | None
 
 
 class GameSummary(BaseModel):
     id: uuid.UUID
     status: GameStatus
     session_count: int
+    completed_sessions: int
     current_session: int
     final_score: float | None = None
     created_at: dt.datetime
+    finished_at: dt.datetime | None = None
 
 
 class Game(GameSummary):
+    catalog_version: str
     metrics: list[Metric]
     sessions: list[Session]
 
 
 class TurnRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
+    text: str = Field(min_length=1, max_length=MAX_TURN_LENGTH)
 
 
 class TurnResult(BaseModel):
