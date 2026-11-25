@@ -1,20 +1,25 @@
-"""Game rules: create games, open sessions, play rounds, judge sessions and apply results.
+"""Game rules: create games, open sessions, take turns, judge sessions and apply results.
 
-These functions change ORM objects but never commit; the route commits, so a failure
-anywhere in a request leaves the database unchanged.
+These functions change ORM objects but never commit; the routes decide when to commit.
+
+The judge functions (finish_session and below) are not called yet: the evaluation endpoint
+that runs them arrives with WBS-3.3.
 """
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from fastapi import status
 from pydantic import ValidationError
 
 from app import ai, content
+from app.config import settings
 from app.content import METRICS, OTHER_CHOICE, TopicConfig, final_score
 from app.errors import ApiError
 from app.models import DebateSession, Game, Turn, User, Verdict
-from app.schemas import JudgeQualitative, JudgeQuantitative, Side, Topic
+from app.schemas import JudgeQualitative, JudgeQuantitative, Side, Speaker, Topic
 
 
 def opposite(side: Side) -> Side:
@@ -67,8 +72,8 @@ def choose_side(game: Game, session_no: int, side: Side) -> DebateSession:
     if session.status != "choosing_side":
         raise ApiError(status.HTTP_409_CONFLICT, "SESSION_NOT_ACTIVE", "The session is not open")
     session.player_side = side
-    # The `for` side always speaks first.
-    session.status = "awaiting_player" if side == "for" else "awaiting_opponent"
+    # The `for` side speaks first, so choosing `against` lets the opponent open.
+    advance(session)
     return session
 
 
@@ -84,56 +89,120 @@ def topic_config(session: DebateSession) -> TopicConfig:
     return config
 
 
-def play_round(game: Game, session_no: int, text: str) -> tuple[Turn, Turn]:
-    """Add the player's turn and the opponent's reply; judge the session after its last round.
+def speaker_at(session: DebateSession, index: int) -> Speaker:
+    """Who gives turn `index` (from 0): the `for` side takes the even turns."""
+    side: Side = "for" if index % 2 == 0 else "against"
+    return "player" if side == session.player_side else "opponent"
 
-    Interim v0.2 flow until WBS-3.2: only sessions waiting for the player can be played, so
-    a player on the `against` side waits for the opponent-turn endpoint.
-    """
+
+def advance(session: DebateSession) -> None:
+    """Set the status from the turns so far: each side speaks `max_rounds` times, then the
+    session waits for evaluation."""
+    count = len(session.turns)
+    if count >= 2 * session.max_rounds:
+        session.status = "awaiting_evaluation"
+    elif speaker_at(session, count) == "player":
+        session.status = "awaiting_player"
+    else:
+        session.status = "awaiting_opponent"
+
+
+def check_turn(game: Game, session: DebateSession, speaker: Speaker) -> None:
+    """Reject a turn by `speaker` unless the session is waiting for exactly that speaker."""
     if game.status == "finished":
         raise ApiError(status.HTTP_409_CONFLICT, "GAME_FINISHED", "The game has already finished")
-    session = get_session(game, session_no)
-    if session.status == "awaiting_opponent":
-        raise ApiError(status.HTTP_409_CONFLICT, "NOT_YOUR_TURN", "It is the opponent's turn")
-    if session.status != "awaiting_player":
-        raise ApiError(
-            status.HTTP_409_CONFLICT, "SESSION_NOT_ACTIVE", "The session is not open for turns"
-        )
+    if session.status == f"awaiting_{speaker}":
+        return
+    if session.status in ("awaiting_player", "awaiting_opponent"):
+        raise ApiError(status.HTTP_409_CONFLICT, "NOT_YOUR_TURN", f"It is not the {speaker}'s turn")
+    raise ApiError(
+        status.HTTP_409_CONFLICT, "SESSION_NOT_ACTIVE", "The session is not open for turns"
+    )
 
-    config = topic_config(session)
-    transcript = [ai.TranscriptLine(t.speaker, t.text) for t in session.turns]
-    transcript.append(ai.TranscriptLine("player", text))
-    try:
-        reply = ai.get_opponent().reply(
-            ai.OpponentRequest(
-                topic=Topic.model_validate(session.topic),
-                side=opposite(session.player_side),
-                transcript=transcript,
-                round_no=session.rounds_played + 1,
-                max_rounds=session.max_rounds,
-            )
-        )
-    except ai.OpponentUnavailable as exc:
-        raise ApiError(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "OPPONENT_UNAVAILABLE",
-            "The opponent could not reply",
-        ) from exc
 
-    seq = len(session.turns)
-    # Ids are set here, not on insert, because the judge cites turns before the commit.
-    player_turn = Turn(id=uuid.uuid4(), seq=seq, speaker="player", text=text, citations=[])
-    opponent_turn = Turn(
+def find_round(
+    session: DebateSession, client_turn_id: uuid.UUID
+) -> tuple[Turn, Turn | None] | None:
+    """The player turn stored with `client_turn_id` and the opponent's reply to it, if any."""
+    for turn in session.turns:
+        if turn.client_turn_id == client_turn_id:
+            following = turn_at(session, turn.seq + 1)
+            return turn, following if following and following.speaker == "opponent" else None
+    return None
+
+
+def turn_at(session: DebateSession, seq: int) -> Turn | None:
+    return next((turn for turn in session.turns if turn.seq == seq), None)
+
+
+def add_player_turn(
+    game: Game, session: DebateSession, text: str, client_turn_id: uuid.UUID
+) -> Turn:
+    check_turn(game, session, "player")
+    turn = Turn(
         id=uuid.uuid4(),
-        seq=seq + 1,
+        seq=len(session.turns),
+        speaker="player",
+        text=text,
+        citations=[],
+        client_turn_id=client_turn_id,
+    )
+    session.turns.append(turn)
+    advance(session)
+    return turn
+
+
+def opponent_request(game: Game, session: DebateSession) -> ai.OpponentRequest:
+    """What the opponent needs for its pending turn; fails unless that turn is due."""
+    check_turn(game, session, "opponent")
+    return ai.OpponentRequest(
+        topic=Topic.model_validate(session.topic),
+        side=opposite(session.player_side),
+        # Speaker and text stay separate, so the adapter can mark the player's text as data.
+        transcript=[ai.TranscriptLine(t.speaker, t.text) for t in session.turns],
+        round_no=sum(t.speaker == "opponent" for t in session.turns) + 1,
+        max_rounds=session.max_rounds,
+    )
+
+
+# Model calls run here so that a try can be abandoned after settings.ai_timeout_seconds even
+# when an adapter does not enforce the timeout itself. An abandoned call keeps its worker until
+# the adapter returns, so adapters must still time out on their own; the pool bounds the damage.
+_opponent_calls = ThreadPoolExecutor(max_workers=8, thread_name_prefix="opponent")
+
+
+def ask_opponent(request: ai.OpponentRequest) -> ai.OpponentReply:
+    """The opponent's reply, tried 1 + settings.opponent_retries times, each try for at most
+    settings.ai_timeout_seconds. Does not touch the database, so it runs outside any
+    transaction."""
+    opponent = ai.get_opponent()
+    for _ in range(1 + settings.opponent_retries):
+        try:
+            reply = _opponent_calls.submit(opponent.reply, request).result(
+                timeout=settings.ai_timeout_seconds
+            )
+        except (ai.OpponentUnavailable, TimeoutError):
+            continue
+        text = reply.text.strip()
+        # An empty reply is invalid output and counts as a failed try.
+        if text:
+            return replace(reply, text=text)
+    raise ApiError(
+        status.HTTP_503_SERVICE_UNAVAILABLE, "OPPONENT_UNAVAILABLE", "The opponent could not reply"
+    )
+
+
+def add_opponent_turn(session: DebateSession, reply: ai.OpponentReply) -> Turn:
+    turn = Turn(
+        id=uuid.uuid4(),
+        seq=len(session.turns),
         speaker="opponent",
         text=reply.text,
         citations=[c.model_dump(mode="json") for c in reply.citations],
     )
-    session.turns.extend([player_turn, opponent_turn])
-    if session.rounds_played == session.max_rounds:
-        finish_session(game, session, config)
-    return player_turn, opponent_turn
+    session.turns.append(turn)
+    advance(session)
+    return turn
 
 
 def finish_session(game: Game, session: DebateSession, config: TopicConfig) -> None:

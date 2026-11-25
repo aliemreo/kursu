@@ -12,6 +12,7 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Uuid, bindparam, create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 import app.models  # noqa: F401  (registers the models on Base.metadata)
 from app.config import BACKEND_DIR
@@ -115,7 +116,7 @@ def test_token_version_migration_starts_existing_users_at_zero(alembic_config: C
         engine.dispose()
 
 
-UUID_COLUMNS = {"id", "owner_id", "game_id"}
+UUID_COLUMNS = {"id", "owner_id", "game_id", "session_id", "client_turn_id"}
 
 
 def insert(connection, table: str, **values) -> None:
@@ -236,3 +237,85 @@ def test_every_session_status_fits_its_column() -> None:
     length = DebateSession.__table__.c.status.type.length
 
     assert max(len(status) for status in get_args(SessionStatus)) <= length
+
+
+def test_client_turn_ids_are_unique_per_session(alembic_config: Config) -> None:
+    """0006: a resent player turn cannot be stored twice, even by concurrent requests."""
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(alembic_config.get_main_option("sqlalchemy.url"))
+    user_id, game_id, session_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    client_turn_id = uuid.uuid4()
+    try:
+        with engine.begin() as connection:
+            insert(
+                connection,
+                "users",
+                id=user_id,
+                email="a@example.com",
+                username="a",
+                password_hash="hash",
+            )
+            insert(
+                connection,
+                "games",
+                id=game_id,
+                owner_id=user_id,
+                status="active",
+                current_session=1,
+                metrics="{}",
+                catalog_version="0.1-placeholder",
+            )
+            insert(
+                connection,
+                "debate_sessions",
+                id=session_id,
+                game_id=game_id,
+                session_no=1,
+                topic_id="public-transport",
+                topic="{}",
+                player_side="for",
+                status="awaiting_player",
+                max_rounds=3,
+            )
+            for seq in (0, 1):  # opponent turns have no client id; nulls never collide
+                insert(
+                    connection,
+                    "turns",
+                    id=uuid.uuid4(),
+                    session_id=session_id,
+                    seq=seq,
+                    speaker="opponent",
+                    text="x",
+                    citations="[]",
+                )
+            insert(
+                connection,
+                "turns",
+                id=uuid.uuid4(),
+                session_id=session_id,
+                seq=2,
+                speaker="player",
+                text="x",
+                citations="[]",
+                client_turn_id=client_turn_id,
+            )
+
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            insert(
+                connection,
+                "turns",
+                id=uuid.uuid4(),
+                session_id=session_id,
+                seq=3,
+                speaker="player",
+                text="x",
+                citations="[]",
+                client_turn_id=client_turn_id,
+            )
+
+        command.downgrade(alembic_config, "0005")
+        with engine.connect() as connection:
+            columns = {c["name"] for c in inspect(connection).get_columns("turns")}
+        assert "client_turn_id" not in columns
+    finally:
+        engine.dispose()

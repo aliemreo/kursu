@@ -95,8 +95,12 @@ class DebateSession(Base):
 
 class Turn(Base):
     __tablename__ = "turns"
-    # The unique sequence number stops two concurrent requests from playing the same round.
-    __table_args__ = (UniqueConstraint("session_id", "seq"),)
+    # The unique sequence number stops two concurrent requests from storing the same turn; the
+    # unique client turn id stops a resent player turn from being stored twice.
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq"),
+        UniqueConstraint("session_id", "client_turn_id", name="uq_turns_session_client_turn"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
@@ -104,6 +108,8 @@ class Turn(Base):
     )
     seq: Mapped[int] = mapped_column(Integer)
     speaker: Mapped[str] = mapped_column(String(16))
+    # Sent by the client with a player turn (TurnRequest.client_turn_id); null for the opponent.
+    client_turn_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     text: Mapped[str] = mapped_column(Text)
     citations: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(

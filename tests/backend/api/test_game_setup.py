@@ -216,7 +216,9 @@ def test_game_resumes_exactly_after_a_restart(
 ) -> None:
     game_id = start_game(2)["id"]
     turn = client.post(
-        f"/api/v1/games/{game_id}/sessions/1/turns", json={"text": "Açılış"}, headers=player
+        f"/api/v1/games/{game_id}/sessions/1/turns",
+        json={"text": "Açılış", "client_turn_id": str(uuid.uuid4())},
+        headers=player,
     )
     assert turn.status_code == 201
     before = client.get(f"/api/v1/games/{game_id}", headers=player).json()
@@ -231,6 +233,7 @@ def test_game_resumes_exactly_after_a_restart(
 
     assert after == before
     assert after["sessions"][0]["rounds_played"] == 1
+    assert len(after["sessions"][0]["turns"]) == 2
     assert after["sessions"][0]["next_speaker"] == "player"
 
 
@@ -249,16 +252,18 @@ def test_a_catalog_change_does_not_alter_a_running_game(
     assert after["catalog_version"] == game["catalog_version"]
 
 
-def test_turn_longer_than_the_limit_is_rejected(
-    client: TestClient, player: Headers, start_game: Callable[..., dict]
-) -> None:
-    game_id = start_game()["id"]
-
-    response = client.post(
-        f"/api/v1/games/{game_id}/sessions/1/turns",
-        json={"text": "a" * (MAX_TURN_LENGTH + 1)},
-        headers=player,
-    )
-
-    assert response.status_code == 422
+def test_game_config_reports_the_enforced_turn_limit() -> None:
+    # TurnRequest validates against MAX_TURN_LENGTH; test_turns.py checks the rejection.
     assert game_config().max_turn_length == MAX_TURN_LENGTH
+
+
+def test_topics_list_both_positions(client: TestClient) -> None:
+    topics = client.get("/api/v1/topics").json()
+
+    assert len(topics) >= 5
+    assert all(set(topic["positions"]) == {"for", "against"} for topic in topics)
+
+
+def test_games_require_a_token(client: TestClient) -> None:
+    assert client.get("/api/v1/games").status_code == 401
+    assert client.post("/api/v1/games", json={"session_count": 1}).status_code == 401

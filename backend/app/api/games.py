@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, HTTPException, Path, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +18,7 @@ from app.schemas import (
     JudgeQualitative,
     JudgeQuantitative,
     Metric,
+    OpponentTurnResult,
     Session,
     Speaker,
     Topic,
@@ -136,35 +137,125 @@ def choose_side(
     return to_session(session)
 
 
+def play_opponent(
+    db: DbSession, game_id: uuid.UUID, user: models.User, session_no: int
+) -> tuple[models.Turn, models.DebateSession]:
+    """Generate and store the pending opponent turn.
+
+    The model can take up to a minute or more, so no transaction or row lock is held while it
+    works: the state is checked under the lock, the lock is released, the model replies, and
+    the turn is stored under the lock only if no other request stored it meanwhile. Otherwise
+    the stored turn is returned, so concurrent calls all answer with the same turn.
+    """
+    game = owned_game(db, game_id, user, lock=True)
+    session = rules.get_session(game, session_no)
+    request = rules.opponent_request(game, session)
+    seq = len(session.turns)
+    db.commit()  # nothing changed; ends the transaction and releases the lock
+
+    reply = rules.ask_opponent(request)
+
+    db.expire_all()  # read what other requests stored while the model worked
+    game = owned_game(db, game_id, user, lock=True)
+    session = rules.get_session(game, session_no)
+    if len(session.turns) == seq and session.status == "awaiting_opponent":
+        turn = rules.add_opponent_turn(session, reply)
+        try:
+            db.commit()
+            return turn, session
+        except IntegrityError:
+            # Another request stored this turn between our check and our commit.
+            db.rollback()
+            session = rules.get_session(owned_game(db, game_id, user), session_no)
+    db.commit()
+    stored = rules.turn_at(session, seq)
+    if stored is None or stored.speaker != "opponent":
+        raise ApiError(status.HTTP_409_CONFLICT, "NOT_YOUR_TURN", "No opponent turn is pending")
+    return stored, session
+
+
+def stored_round(
+    session: models.DebateSession, client_turn_id: uuid.UUID, response: Response
+) -> TurnResult | None:
+    """The earlier answer for a resent turn (200), or None for a new turn."""
+    stored = rules.find_round(session, client_turn_id)
+    if stored is None:
+        return None
+    player_turn, opponent_turn = stored
+    response.status_code = status.HTTP_200_OK
+    return TurnResult(
+        player_turn=Turn.model_validate(player_turn),
+        opponent_turn=Turn.model_validate(opponent_turn) if opponent_turn else None,
+        session=to_session(session),
+    )
+
+
 @router.post(
     "/{game_id}/sessions/{session_no}/turns",
     status_code=status.HTTP_201_CREATED,
     response_model=TurnResult,
 )
 def submit_turn(
-    game_id: uuid.UUID, session_no: SessionNo, body: TurnRequest, db: DbSession, user: CurrentUser
+    game_id: uuid.UUID,
+    session_no: SessionNo,
+    body: TurnRequest,
+    response: Response,
+    db: DbSession,
+    user: CurrentUser,
 ) -> TurnResult:
-    """Play one round: store the player's turn and return the opponent's reply."""
-    game = owned_game(db, game_id, user)
+    """Store the player's turn, then generate the opponent's reply if one is due.
+
+    The player's turn is committed before the opponent is asked, so it is kept when the
+    opponent fails; the client then retries with the opponent-turn endpoint.
+    """
     try:
-        player_turn, opponent_turn = rules.play_round(game, session_no, body.text)
-        db.commit()
+        game = owned_game(db, game_id, user, lock=True)
+        session = rules.get_session(game, session_no)
+        # Checked before the turn rules: a resent turn may arrive after the session moved on.
+        if (earlier := stored_round(session, body.client_turn_id, response)) is not None:
+            db.commit()
+            return earlier
+        player_turn = rules.add_player_turn(game, session, body.text, body.client_turn_id)
+        try:
+            db.commit()
+        except IntegrityError:
+            # A concurrent request stored this turn (same client id) or this position first.
+            db.rollback()
+            session = rules.get_session(owned_game(db, game_id, user), session_no)
+            if (earlier := stored_round(session, body.client_turn_id, response)) is not None:
+                return earlier
+            raise ApiError(
+                status.HTTP_409_CONFLICT, "NOT_YOUR_TURN", "This turn was already played"
+            ) from None
+
+        opponent_turn = None
+        if session.status == "awaiting_opponent":
+            opponent_turn, session = play_opponent(db, game_id, user, session_no)
     except HTTPException:
         db.rollback()
         raise
-    except IntegrityError:
-        # Another request stored this round first.
-        db.rollback()
-        raise ApiError(
-            status.HTTP_409_CONFLICT, "NOT_YOUR_TURN", "This round was already played"
-        ) from None
-    session = game.sessions[session_no - 1]
     return TurnResult(
         player_turn=Turn.model_validate(player_turn),
-        opponent_turn=Turn.model_validate(opponent_turn),
-        session_finished=session.status == "finished",
-        game_finished=game.status == "finished",
+        opponent_turn=Turn.model_validate(opponent_turn) if opponent_turn else None,
+        session=to_session(session),
     )
+
+
+@router.post(
+    "/{game_id}/sessions/{session_no}/opponent-turn",
+    status_code=status.HTTP_201_CREATED,
+    response_model=OpponentTurnResult,
+)
+def request_opponent_turn(
+    game_id: uuid.UUID, session_no: SessionNo, db: DbSession, user: CurrentUser
+) -> OpponentTurnResult:
+    """Generate the pending opponent turn: the opening, a retry, or after resuming."""
+    try:
+        turn, session = play_opponent(db, game_id, user, session_no)
+    except HTTPException:
+        db.rollback()
+        raise
+    return OpponentTurnResult(opponent_turn=Turn.model_validate(turn), session=to_session(session))
 
 
 @router.get("/{game_id}/sessions/{session_no}/verdict", response_model=Verdict)

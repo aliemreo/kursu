@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     llm_provider: str = "mock"
     jwt_secret: str = DEV_JWT_SECRET
     jwt_expire_minutes: int = 1440
+    # AI calls: an adapter gives up on one try after ai_timeout_seconds, and a failed opponent
+    # reply is tried opponent_retries more times. Together they stay below the frontend's
+    # 120 s request timeout (45 s x 2 tries = 90 s).
+    ai_timeout_seconds: float = 45
+    opponent_retries: int = 1
 
     @model_validator(mode="after")
     def require_real_secret_outside_development(self) -> "Settings":

@@ -8,7 +8,7 @@ tests/
     conftest.py     Shared fixtures: in-memory SQLite database and an API test client
     api/            Endpoint tests through the HTTP API (auth, topics, games, turns, verdicts)
     contract/       The backend serves exactly the endpoints in contracts/openapi.yaml
-    game/           Game rules without the API: topic catalog, validator, topic assignment
+    game/           Game rules without the API: topic catalog, speaking order, verdict rules
     db/             Migrations match the models, have a single head and can be rolled back
 ```
 
