@@ -1,45 +1,51 @@
-"""Game rules: create games, play rounds, judge sessions and apply validated results.
+"""Game rules: create games, open sessions, play rounds, judge sessions and apply results.
 
 These functions change ORM objects but never commit; the route commits, so a failure
-anywhere in a round leaves the database unchanged.
+anywhere in a request leaves the database unchanged.
 """
 
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import HTTPException, status
+from fastapi import status
 from pydantic import ValidationError
 
-from app import ai
-from app.content import METRICS, OTHER_CHOICE, ROUNDS_PER_SESSION, TOPICS, TopicConfig, final_score
+from app import ai, content
+from app.content import METRICS, OTHER_CHOICE, TopicConfig, final_score
+from app.errors import ApiError
 from app.models import DebateSession, Game, Turn, User, Verdict
-from app.schemas import CreateGameRequest, JudgeQualitative, JudgeQuantitative, Side
+from app.schemas import JudgeQualitative, JudgeQuantitative, Side, Topic
 
 
 def opposite(side: Side) -> Side:
     return "against" if side == "for" else "for"
 
 
-def create_game(owner: User, request: CreateGameRequest) -> Game:
-    unknown = [s.topic_id for s in request.sessions if s.topic_id not in TOPICS]
-    if unknown:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown topic id(s): {', '.join(unknown)}"
+def create_game(owner: User, session_count: int) -> Game:
+    """A new game with a different catalog topic per session and every metric at its start."""
+    config = content.game_config()
+    if not config.min_sessions <= session_count <= config.max_sessions:
+        raise ApiError(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "INVALID_SESSION_COUNT",
+            f"A game has {config.min_sessions} to {config.max_sessions} sessions",
         )
     sessions = [
         DebateSession(
             session_no=no,
-            topic_id=s.topic_id,
-            player_side=s.player_side,
-            max_rounds=ROUNDS_PER_SESSION,
-            status="in_progress" if no == 1 else "pending",
+            topic_id=topic_id,
+            topic=content.TOPICS[topic_id].topic.model_dump(mode="json"),
+            player_side=None,
+            max_rounds=config.rounds_per_session,
+            status="choosing_side" if no == 1 else "pending",
         )
-        for no, s in enumerate(request.sessions, start=1)
+        for no, topic_id in enumerate(content.pick_topics(session_count), start=1)
     ]
     return Game(
         owner_id=owner.id,
         status="active",
         current_session=1,
+        catalog_version=config.catalog_version,
         metrics={metric.id: metric.initial for metric in METRICS},
         sessions=sessions,
     )
@@ -47,27 +53,60 @@ def create_game(owner: User, request: CreateGameRequest) -> Game:
 
 def get_session(game: Game, session_no: int) -> DebateSession:
     if not 1 <= session_no <= len(game.sessions):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+        raise ApiError(status.HTTP_404_NOT_FOUND, "SESSION_NOT_FOUND", "Session not found")
     return game.sessions[session_no - 1]
 
 
-def play_round(game: Game, session_no: int, text: str) -> tuple[Turn, Turn]:
-    """Add the player's turn and the opponent's reply; judge the session after its last round."""
-    if game.status == "finished":
-        raise HTTPException(status.HTTP_409_CONFLICT, "The game has already finished")
+def choose_side(game: Game, session_no: int, side: Side) -> DebateSession:
+    """Record the player's side once, while the session is open for it."""
     session = get_session(game, session_no)
-    if session.status != "in_progress":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, f"Session {game.current_session} is in progress"
+    if session.player_side is not None:
+        raise ApiError(
+            status.HTTP_409_CONFLICT, "SIDE_ALREADY_CHOSEN", "The side is already chosen"
+        )
+    if session.status != "choosing_side":
+        raise ApiError(status.HTTP_409_CONFLICT, "SESSION_NOT_ACTIVE", "The session is not open")
+    session.player_side = side
+    # The `for` side always speaks first.
+    session.status = "awaiting_player" if side == "for" else "awaiting_opponent"
+    return session
+
+
+def topic_config(session: DebateSession) -> TopicConfig:
+    """The catalog rules (categories, metric limits) of the session's topic."""
+    config = content.TOPICS.get(session.topic_id)
+    if config is None:
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "SESSION_NOT_ACTIVE",
+            f"Topic {session.topic_id!r} is no longer in the catalog",
+        )
+    return config
+
+
+def play_round(game: Game, session_no: int, text: str) -> tuple[Turn, Turn]:
+    """Add the player's turn and the opponent's reply; judge the session after its last round.
+
+    Interim v0.2 flow until WBS-3.2: only sessions waiting for the player can be played, so
+    a player on the `against` side waits for the opponent-turn endpoint.
+    """
+    if game.status == "finished":
+        raise ApiError(status.HTTP_409_CONFLICT, "GAME_FINISHED", "The game has already finished")
+    session = get_session(game, session_no)
+    if session.status == "awaiting_opponent":
+        raise ApiError(status.HTTP_409_CONFLICT, "NOT_YOUR_TURN", "It is the opponent's turn")
+    if session.status != "awaiting_player":
+        raise ApiError(
+            status.HTTP_409_CONFLICT, "SESSION_NOT_ACTIVE", "The session is not open for turns"
         )
 
-    config = TOPICS[session.topic_id]
+    config = topic_config(session)
     transcript = [ai.TranscriptLine(t.speaker, t.text) for t in session.turns]
     transcript.append(ai.TranscriptLine("player", text))
     try:
         reply = ai.get_opponent().reply(
             ai.OpponentRequest(
-                topic=config.topic,
+                topic=Topic.model_validate(session.topic),
                 side=opposite(session.player_side),
                 transcript=transcript,
                 round_no=session.rounds_played + 1,
@@ -75,8 +114,10 @@ def play_round(game: Game, session_no: int, text: str) -> tuple[Turn, Turn]:
             )
         )
     except ai.OpponentUnavailable as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "The opponent could not reply"
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "OPPONENT_UNAVAILABLE",
+            "The opponent could not reply",
         ) from exc
 
     seq = len(session.turns)
@@ -102,7 +143,7 @@ def finish_session(game: Game, session: DebateSession, config: TopicConfig) -> N
     game.metrics = dict(verdict.metrics_after)
     if session.session_no < len(game.sessions):
         game.current_session = session.session_no + 1
-        game.sessions[session.session_no].status = "in_progress"
+        game.sessions[session.session_no].status = "choosing_side"
     else:
         game.status = "finished"
         game.final_score = final_score(game.metrics)
@@ -112,7 +153,7 @@ def finish_session(game: Game, session: DebateSession, config: TopicConfig) -> N
 def judge_session(game: Game, session: DebateSession, config: TopicConfig) -> Verdict:
     judge = ai.get_judge()
     request = ai.JudgeRequest(
-        topic=config.topic,
+        topic=Topic.model_validate(session.topic),
         player_side=session.player_side,
         transcript=[(str(t.id), ai.TranscriptLine(t.speaker, t.text)) for t in session.turns],
         category_options={c.id: c.choices for c in config.categories},
@@ -122,8 +163,10 @@ def judge_session(game: Game, session: DebateSession, config: TopicConfig) -> Ve
         qualitative = judge.qualitative(request)
         quantitative = judge.quantitative(request, qualitative)
     except (ai.JudgeUnavailable, ValidationError) as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "The judge could not evaluate the session"
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "EVALUATION_FAILED",
+            "The judge could not evaluate the session",
         ) from exc
 
     before = dict(game.metrics)

@@ -45,6 +45,8 @@ class Game(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     status: Mapped[str] = mapped_column(String(16), default="active")
     current_session: Mapped[int] = mapped_column(Integer, default=1)
+    # Topic catalog the sessions were created from (app.content.CATALOG_VERSION).
+    catalog_version: Mapped[str] = mapped_column(String(32))
     # Current value per metric id; metric names and bounds live in app.content.
     metrics: Mapped[dict[str, float]] = mapped_column(JSON)
     final_score: Mapped[float | None] = mapped_column(Float)
@@ -69,8 +71,13 @@ class DebateSession(Base):
     game_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"))
     session_no: Mapped[int] = mapped_column(Integer)
     topic_id: Mapped[str] = mapped_column(String(64))
-    player_side: Mapped[str] = mapped_column(String(8))
-    status: Mapped[str] = mapped_column(String(16), default="pending")
+    # The topic as the player saw it when the game was created (schemas.Topic), so a later
+    # catalog change never alters a running or finished game.
+    topic: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # Null until the player chooses a side.
+    player_side: Mapped[str | None] = mapped_column(String(8))
+    # One of schemas.SessionStatus; the longest value is 19 characters.
+    status: Mapped[str] = mapped_column(String(24), default="pending")
     max_rounds: Mapped[int] = mapped_column(Integer)
 
     game: Mapped[Game] = relationship(back_populates="sessions")

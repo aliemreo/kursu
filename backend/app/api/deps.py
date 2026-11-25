@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.errors import ApiError
 from app.models import User
 from app.security import InvalidTokenError, decode_access_token
 
@@ -18,9 +19,10 @@ def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> User:
     """The user behind the bearer token. Every protected route depends on this."""
-    unauthorized = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Not authenticated",
+    unauthorized = ApiError(
+        status.HTTP_401_UNAUTHORIZED,
+        "NOT_AUTHENTICATED",
+        "Not authenticated",
         headers={"WWW-Authenticate": "Bearer"},
     )
     if credentials is None:

@@ -98,8 +98,6 @@ paths:
                 items: { $ref: "#/components/schemas/Topic" }
   /game-config:
     get:
-      x-status: planned
-      x-wbs: WBS-3.1
       summary: Limits the new-game screen needs
       description: Public. The session-count range never exceeds the number of catalog topics.
       responses:
@@ -110,8 +108,6 @@ paths:
               schema: { $ref: "#/components/schemas/GameConfig" }
   /games:
     get:
-      x-status: changing
-      x-wbs: WBS-3.1
       summary: The player's own games, newest first
       security: [{ bearerAuth: [] }]
       responses:
@@ -124,8 +120,6 @@ paths:
                 items: { $ref: "#/components/schemas/GameSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
-      x-status: changing
-      x-wbs: WBS-3.1
       summary: Start a new game
       description: >
         The system assigns a different catalog topic to each session and sets every metric to
@@ -151,8 +145,6 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
   /games/{game_id}:
     get:
-      x-status: changing
-      x-wbs: WBS-3.2
       summary: Current game state, including sessions, transcripts and metrics
       description: >
         Has no side effects. To resume a game, the client reads `status` of the current session
@@ -192,8 +184,6 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
   /games/{game_id}/sessions/{session_no}/side:
     post:
-      x-status: planned
-      x-wbs: WBS-3.2
       summary: Choose the player's side for the session
       description: >
         Allowed once, while the session is `choosing_side`. Choosing `for` moves the session
@@ -400,7 +390,7 @@ components:
         Error body. `code` is stable and machine-readable, so the client can show its own
         Turkish message; `detail` is an English explanation for developers. Validation errors
         (422 from FastAPI) carry a list in `detail` and no `code`. `code` is served from
-        WBS-3.2 on; until then only `detail` is present.
+        WBS-3.1 on; a few errors of operations still marked `changing` may lack it.
       required: [detail]
       properties:
         detail: { type: string, example: It is not the player's turn }
