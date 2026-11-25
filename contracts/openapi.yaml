@@ -213,16 +213,16 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
   /games/{game_id}/sessions/{session_no}/turns:
     post:
-      x-status: changing
-      x-wbs: WBS-3.2
       summary: Submit the player's turn and receive the opponent's reply
       description: >
         Allowed while the session is `awaiting_player`. The player's turn is stored first, then
         the opponent replies. `client_turn_id` makes the request safe to resend: the same id
-        never creates a second turn and answers 200 with the stored round. If the opponent
-        fails, the player's turn is kept, the session stays `awaiting_opponent`, and the client
+        never creates a second turn and answers 200 with the stored round, even if the resent
+        text differs. Leading and trailing whitespace is removed before the length checks. If
+        the opponent fails, the player's turn is kept, the session stays `awaiting_opponent`, and the client
         retries with the opponent-turn endpoint. When the player's turn was the session's last,
-        no opponent reply follows and the session moves to `awaiting_evaluation`.
+        no opponent reply follows and the session moves to `awaiting_evaluation`. The opponent
+        reply is limited as described for the opponent-turn endpoint.
       security: [{ bearerAuth: [] }]
       parameters:
         - { $ref: "#/components/parameters/GameId" }
@@ -258,13 +258,14 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
   /games/{game_id}/sessions/{session_no}/opponent-turn:
     post:
-      x-status: planned
-      x-wbs: WBS-3.2
       summary: Generate the pending opponent turn
       description: >
         Allowed while the session is `awaiting_opponent`: for the opponent's opening when the
         player chose `against`, to retry after `OPPONENT_UNAVAILABLE`, and when resuming a game.
-        Two concurrent calls store one turn; both answer with it.
+        Two concurrent calls store one turn; both answer with it. Each try waits for the model
+        at most `AI_TIMEOUT_SECONDS` (45 s) and a failed or empty reply is tried
+        `OPPONENT_RETRIES` (1) more time, so the request answers within about 90 seconds;
+        clients should wait longer than that before giving up.
       security: [{ bearerAuth: [] }]
       parameters:
         - { $ref: "#/components/parameters/GameId" }
@@ -278,7 +279,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: "`NOT_YOUR_TURN` (no opponent turn is pending) or `SESSION_NOT_ACTIVE`"
+          description: "`NOT_YOUR_TURN` (no opponent turn is pending), `SESSION_NOT_ACTIVE` or `GAME_FINISHED`"
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

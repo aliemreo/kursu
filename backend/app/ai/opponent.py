@@ -5,7 +5,11 @@ from app.schemas import Citation, Side, Speaker, Topic
 
 
 class OpponentUnavailable(Exception):
-    """The model could not produce a reply (down, timed out, invalid output)."""
+    """The model could not produce a reply (down, timed out, invalid output).
+
+    Adapters raise it instead of their own errors, and give up after
+    settings.ai_timeout_seconds; the game engine then retries or reports the failure.
+    """
 
 
 @dataclass(frozen=True)
@@ -18,8 +22,9 @@ class TranscriptLine:
 class OpponentRequest:
     topic: Topic
     side: Side  # the side the opponent defends
-    transcript: list[TranscriptLine]  # ends with the player's newest turn
-    round_no: int
+    # Every turn so far, oldest first; empty for the opening when the opponent speaks first.
+    transcript: list[TranscriptLine]
+    round_no: int  # the opponent's turn number in this session, from 1
     max_rounds: int
 
 
@@ -38,9 +43,11 @@ class MockOpponent:
 
     def reply(self, request: OpponentRequest) -> OpponentReply:
         position = getattr(request.topic.positions, "for_" if request.side == "for" else "against")
+        closing = " Son sözüm budur." if request.round_no == request.max_rounds else ""
+        if not request.transcript:
+            return OpponentReply(text=f"Açılış konuşmamda şunu savunuyorum: {position}{closing}")
         player_words = request.transcript[-1].text.split()
         quoted = " ".join(player_words[:8]) + ("…" if len(player_words) > 8 else "")
-        closing = " Son sözüm budur." if request.round_no == request.max_rounds else ""
         return OpponentReply(
             text=(
                 f"Sayın konuşmacı \"{quoted}\" diyor, ancak bu görüşe katılmıyorum. "
